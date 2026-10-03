@@ -1,0 +1,14 @@
+# fatebook pipeline configuration.
+# Copy to config.toml (next to this file) and adjust; config.toml is
+# gitignored. Every key is optional — unset keys fall back to the repo
+# layout (directories next to fsn_extract/).
+
+[paths]
+# Directory holding the game's FPD packs (*.bin). Default: Blade/obb
+#blade = r'C:\Games\FateSN\Blade\obb'
+
+# FSNr_tools EPK decryptor. Default: tools_fsnr/build/main.exe
+#main_exe = r'C:\tools\fsnr\build\main.exe'
+
+# FSNr_tools FPD keystream. Default: tools_fsnr/scripts/decryptKey.bin
+#key_bin = r'C:\tools\fsnr\scripts\decryptKey.bin'

@@ -1,0 +1,32 @@
+# This repo tracks pipeline scripts only. The game install, extracted game
+# data, and build outputs must never be committed (copyrighted / huge).
+
+# Game install (8+ GB, copyrighted)
+/Blade/
+
+# Machine-specific pipeline configuration (copy from config.example.toml)
+/config.toml
+
+# Vendored third-party repos — keep their own git history, see README.md
+/crengine_src/
+/tools_fpm/
+/tools_fsnr/
+
+# Build/output guards anywhere in the repo
+*.log
+*.epub
+__pycache__/
+*.pyc
+
+# ZCode editor session config (contains only tool defaults)
+.zcodeignore
+
+# fsn_extract: ignore everything except scripts and docs. Everything else
+# there is game-derived extraction/build data (raw/, kag/, img/, book/,
+# book_work*/, epub_work/, preview/, shots/, lp_audit data files, ...).
+/fsn_extract/*
+!/fsn_extract/README.md
+!/fsn_extract/*.py
+!/fsn_extract/*.ps1
+!/fsn_extract/script_epk_map.json
+/fsn_extract/lp_audit/
