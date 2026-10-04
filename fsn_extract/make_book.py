@@ -47,13 +47,12 @@ def main():
     if args.extract_only:
         return
 
-    from book_model import build_book
-    build_book()
-
-    book = os.path.join(HERE, 'book')
-    for fn in sorted(os.listdir(book)):
-        if fn.endswith('.epub'):
-            print('built:', os.path.join(book, fn))
+    from book_model import build_book, VOLUMES
+    for i, (vtitle, vparts, vout) in enumerate(VOLUMES, 1):
+        print(f'=== Volume {vtitle} ===')
+        build_book(limit_parts=vparts, volume_title=vtitle, out_name=vout,
+                   work_dir=os.path.join(HERE, f'book_work_v{i}'))
+        print('built:', os.path.join(HERE, 'book', vout))
 
 
 if __name__ == '__main__':

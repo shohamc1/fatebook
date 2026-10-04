@@ -99,18 +99,30 @@ class ImageResolver:
 
     def get_jpg(self, name, fliplr=False, flipud=False):
         """Returns (images-dir filename, w, h) or None if unresolvable."""
+        from PIL import Image, ImageOps
+        import io
         key = (name, fliplr, flipud)
         if key in self.used:
             return self.used[key]
         ent = self._lookup(name)
         if ent is None:
             return None
+        # unique filename: Japanese-only names collide when slugified, so
+        # append a short hash of the original storage name
+        fn = ('bg_' + re.sub(r'[^A-Za-z0-9]+', '_', name).strip('_') +
+              '_' + hashlib.md5(name.encode('utf-8')).hexdigest()[:6] +
+              ('_f' if (fliplr or flipud) else '') + '.jpg')
+        out = os.path.join(self.cachedir, fn)
+        # deterministic conversion (same blob, same params): reuse the
+        # file a previous build left in the cache dir, like ct_/zm_/lay_
+        if os.path.exists(out):
+            with Image.open(out) as im:
+                self.used[key] = (fn, im.width, im.height)
+            return self.used[key]
         datname, off, size = ent
         with open(self._blob(datname), 'rb') as f:
             f.seek(off)
             raw = f.read(size)
-        from PIL import Image, ImageOps
-        import io
         im = Image.open(io.BytesIO(raw)).convert('RGB')
         if fliplr:
             im = ImageOps.mirror(im)
@@ -119,12 +131,6 @@ class ImageResolver:
         if im.width > 1600:
             im = im.resize((1600, round(im.height * 1600 / im.width)),
                            Image.LANCZOS)
-        # unique filename: Japanese-only names collide when slugified, so
-        # append a short hash of the original storage name
-        fn = ('bg_' + re.sub(r'[^A-Za-z0-9]+', '_', name).strip('_') +
-              '_' + hashlib.md5(name.encode('utf-8')).hexdigest()[:6] +
-              ('_f' if (fliplr or flipud) else '') + '.jpg')
-        out = os.path.join(self.cachedir, fn)
         im.save(out, quality=86)
         self.used[key] = (fn, im.width, im.height)
         return self.used[key]

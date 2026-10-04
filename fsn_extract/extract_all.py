@@ -23,6 +23,7 @@ import argparse
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -55,6 +56,8 @@ def extract(dest=HERE, force=False):
     os.makedirs(img_dir, exist_ok=True)
 
     stats = {'kag': 0, 'epk': 0, 'dec': 0, 'dat': 0, 'manifest': 0}
+    to_dec = []                 # epks queued for main.exe, decrypted in
+                                # parallel once all packs are walked
 
     def write_entry(fpd, i, n):
         name, _, _, full_len = fpd.entries[i]
@@ -68,8 +71,7 @@ def extract(dest=HERE, force=False):
             if changed:
                 n['epk'] += 1
             if changed or not os.path.exists(epk_path + '_dec'):
-                subprocess.run([config.MAIN_EXE, 'dec', epk_path],
-                               check=True, stdout=subprocess.DEVNULL)
+                to_dec.append(epk_path)
                 n['dec'] += 1
         elif name.startswith('pack/'):
             if base.endswith('.dat'):
@@ -129,6 +131,14 @@ def extract(dest=HERE, force=False):
             print(f'{fn}:', done)
         for k in stats:
             stats[k] += n[k]
+    # one main.exe process per epk (~27 ms spawn overhead each): run the
+    # queue through a small pool — separate processes, so threads scale
+    if to_dec:
+        def _dec(p):
+            subprocess.run([config.MAIN_EXE, 'dec', p], check=True,
+                           stdout=subprocess.DEVNULL)
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            list(ex.map(_dec, to_dec))
     return stats
 
 

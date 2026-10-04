@@ -1415,6 +1415,17 @@ VOLUMES = [
 ]
 
 
+def link_or_copy(src, dst):
+    """Hardlink when src and dst share a volume, else copy. The staged
+    work tree must contain the images (validate_book.py checks it in
+    place), but the bytes are final and never modified there — linking
+    skips re-writing ~700 MB per build."""
+    try:
+        os.link(src, dst)
+    except OSError:
+        shutil.copy(src, dst)
+
+
 def build_book(limit_parts=None, volume_title=None, out_name=None,
                work_dir=None, _limit_chapters=0):
     flow = load_flowtext()
@@ -1472,7 +1483,7 @@ def build_book(limit_parts=None, volume_title=None, out_name=None,
     cover_src = os.path.join(HERE, 'img', 'cover.jpg')
     has_cover = os.path.exists(cover_src)
     if has_cover:
-        shutil.copy(cover_src, os.path.join(oebps, 'cover.jpg'))
+        link_or_copy(cover_src, os.path.join(oebps, 'cover.jpg'))
         manifest.append('  <item id="cover-image" href="cover.jpg" '
                         'media-type="image/jpeg" properties="cover-image"/>')
     with open(os.path.join(oebps, 'css', 'style.css'), 'w', encoding='utf-8') as f:
@@ -1617,7 +1628,7 @@ def build_book(limit_parts=None, volume_title=None, out_name=None,
         src = os.path.join(resolver.cachedir, fn)
         if not os.path.exists(src):
             continue
-        shutil.copy(src, os.path.join(oebps, 'images', fn))
+        link_or_copy(src, os.path.join(oebps, 'images', fn))
         total_img += os.path.getsize(src)
         iid = 'i' + re.sub(r'\W', '_', fn[:-4])
         mt = 'image/webp' if fn.endswith('.webp') else 'image/jpeg'
@@ -1630,7 +1641,7 @@ def build_book(limit_parts=None, volume_title=None, out_name=None,
     for art in ['dead_end.jpg'] + [f'{p}.jpg' for p in POSTERS.values()]:
         src = os.path.join(HERE, 'img', art)
         if os.path.exists(src):
-            shutil.copy(src, os.path.join(oebps, 'images', art))
+            link_or_copy(src, os.path.join(oebps, 'images', art))
             iid = 'i' + re.sub(r'\W', '_', art[:-4])
             manifest.append(f'  <item id="{iid}" href="images/{art}" '
                             f'media-type="image/jpeg"/>')
