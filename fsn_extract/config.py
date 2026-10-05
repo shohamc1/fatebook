@@ -21,6 +21,7 @@ derived from the scripts' own location, so the repo itself can live anywhere.
 import glob
 import os
 import sys
+import threading
 import tomllib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -42,3 +43,26 @@ MAIN_EXE = _cfg.get('main_exe',
 KEY_BIN = _cfg.get('key_bin', os.path.join(_REPO, 'tools_fsnr', 'scripts', 'decryptKey.bin'))
 OUTPUT_DIR = _cfg.get('output', os.path.join(_REPO, 'output'))
 TEMP = os.path.join(OUTPUT_DIR, 'temp')
+
+
+def _tmp_name(path):
+    return f'{path}.{os.getpid()}.{threading.get_ident()}.tmp'
+
+
+def write_atomic(path, data):
+    """Write bytes so a concurrent reader never sees a partial cache file."""
+    tmp = _tmp_name(path)
+    with open(tmp, 'wb') as f:
+        f.write(data)
+    os.replace(tmp, path)
+
+
+def save_atomic(im, path, **kw):
+    """PIL save() with write_atomic semantics; format comes from the
+    extension, as in im.save(path)."""
+    from PIL import Image
+    fmt = kw.pop('format', None) or Image.registered_extensions()[
+        os.path.splitext(path)[1].lower()]
+    tmp = _tmp_name(path)
+    im.save(tmp, format=fmt, **kw)
+    os.replace(tmp, path)

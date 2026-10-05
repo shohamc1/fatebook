@@ -5,6 +5,7 @@ description = "Convert Fate/stay night REMASTERED into a branch-aware EPUB"
 requires-python = ">=3.11"
 dependencies = [
     "pillow>=10.0",
+    "numpy>=1.26",
 ]
 
 [project.scripts]

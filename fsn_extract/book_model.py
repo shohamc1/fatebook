@@ -28,12 +28,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 try:
     from .fsn2epub import (SPEAKERS, TAG_RE, smart_quotes, ImageResolver,
                            MAIN_EXE, KEY_BIN)
-    from .config import TEMP
+    from .config import TEMP, save_atomic
 except ImportError:  # run as a plain script
     sys.path.insert(0, HERE)
     from fsn2epub import (SPEAKERS, TAG_RE, smart_quotes, ImageResolver,  # noqa: E402
                           MAIN_EXE, KEY_BIN)
-    from config import TEMP  # noqa: E402
+    from config import TEMP, save_atomic  # noqa: E402
 import sprites
 
 IMG = os.path.join(TEMP, 'img')
@@ -136,6 +136,7 @@ PARAM_RE = re.compile(r'(\w+)=(\S+)')
 # via YouTube frames: level 60 measured gain ~0.2-0.3 in shadows, level 62
 # ~0.8 at midtones, level -120 ~0.6-0.8 everywhere (see lp_audit).
 CONTRAST_RE = re.compile(r'^@contrast(off)?T?\b')
+COND_RE = re.compile(r'^@(nega|monocro|sepia|condoff)T?\b')
 CONTRAST_GAMMA_P = 1.1     # out = 255*(in/255)^((100/level)^p), level > 0
 CONTRAST_NEG_DIV = 400.0   # gain = 1 + level/400, level < 0 (floor 0.15)
 
@@ -157,25 +158,33 @@ def contrast_lut(level):
 def apply_contrast(resolver, base, level):
     """Tone-mapped copy of a resolved slide image under an active
     @contrast level -> resolver-style (filename, w, h)."""
-    from PIL import Image
-    lut = contrast_lut(level)
-    if lut is None:
+    from PIL import Image, ImageOps
+    lut = None if isinstance(level, str) else contrast_lut(level)
+    if lut is None and not isinstance(level, str):
         return base
-    key = hashlib.md5(repr((base[0], int(level))).encode('utf-8')).hexdigest()[:12]
+    key = hashlib.md5(repr((base[0], level)).encode('utf-8')).hexdigest()[:12]
     fn = f'ct_{key}.jpg'
     out = os.path.join(resolver.cachedir, fn)
     if os.path.exists(out):
         w, h = Image.open(out).size
         return (fn, w, h)
     im = Image.open(os.path.join(resolver.cachedir, base[0])).convert('RGB')
-    im = im.point(lut * 3)
-    im.save(out, quality=86)
+    if level == 'nega':
+        im = ImageOps.invert(im)
+    elif level == 'monocro':
+        im = ImageOps.grayscale(im).convert('RGB')
+    elif level == 'sepia':
+        im = ImageOps.colorize(ImageOps.grayscale(im), '#1a0f05', '#fff0d0')
+    else:
+        im = im.point(lut * 3)
+    save_atomic(im, out, quality=86)
     return (fn, im.width, im.height)
 
 
-# @fadein/@bg clear the standing cast unless noclear=1 (693 script lines
-# pass noclear to keep characters placed on the back page beforehand)
-CLEARING_BG_CMDS = {'fadein', 'fadein4demo', 'bg'}
+# Every bg command except @rep (which replaces the foreground itself) clears
+# the standing cast unless noclear=1 (693 script lines pass noclear to keep
+# characters placed on the back page beforehand). The a2a/i2i/i2o transitions
+# clear too: across the scripts none is followed by an explicit @cl.
 REP_POS = {'l': 'left', 'lc': 'leftcenter', 'c': 'center',
            'rc': 'rightcenter', 'r': 'right'}
 
@@ -276,7 +285,7 @@ def zoom_crop(resolver, base, base_name, zoom):
     y0 = min(max(0, fy + (sy - fy) / m), im.height / s - h)
     box = tuple(round(v * s) for v in (x0, y0, x0 + w, y0 + h))
     im = im.crop(box).resize((1600, round(1600 * h / w)), Image.LANCZOS)
-    im.save(out, quality=86)
+    save_atomic(im, out, quality=86)
     return (fn, im.width, im.height)
 
 
@@ -414,7 +423,7 @@ def layer_composite(resolver, base, base_name, info):
     if canvas.width > 1600:
         canvas = canvas.resize((1600, round(canvas.height * 1600 / canvas.width)),
                                Image.LANCZOS)
-    canvas.save(out, quality=86)
+    save_atomic(canvas, out, quality=86)
     return (fn, canvas.width, canvas.height)
 
 
@@ -481,6 +490,7 @@ def parse_scene(text, slots):
     fgcg = {}             # index -> full-screen art on a foreground layer
     fgpos = {}            # index -> (left, top) script placement of that art
     zoom = [None]         # @dash camera zoom on the current bg (dash_zoom)
+    ov = [False]          # an @i2o image is shown above the base bg
     contrast = [None]     # active @contrast level (None = neutral)
 
     # Overlay/strip families: names the script places on layers >= 1 are
@@ -654,17 +664,23 @@ def parse_scene(text, slots):
             queue_visual(None)
             bg = ('black', False, False)
             zoom[0] = None
+            ov[0] = False
             continue
         bgc = parse_bg_cmd(ln)
         if bgc:
             cmd, name, flr, fud, p = bgc
+            # retail keeps an @i2o image on screen through a later @bg (it
+            # changes the base layer underneath); any other switch clears it
+            if cmd == 'bg' and ov[0] and name.lower() not in ('black', 'white'):
+                continue
+            ov[0] = cmd.startswith('i2o')
             if p.get('_low') and (fgcg or (bg and bg[0].lower()
                                            not in ('black', 'white'))):
                 continue   # low-opacity zoom blur over an existing scene
             before = (vkey(), spr_state.soft_key())
             flush_paras()
             if ((name.lower() in ('black', 'white') and not p.get('storages'))
-                    or (cmd in CLEARING_BG_CMDS
+                    or (cmd != 'rep'
                         and not truthy(p.get('noclear', '')))):
                 spr_state.slots.clear()
                 fgcg.clear()
@@ -700,6 +716,24 @@ def parse_scene(text, slots):
             continue
         if IMAGE_RE.match(ln):
             m = BG2_RE.match(ln) or re.match(r'^@image(?:ex)?\s.*?storage=(\S+)', ln)
+            if m and sprites.is_sprite_name(m.group(1)):
+                # a character placed on an image layer by pixel offset
+                # (fades/bobs in via @move); layer x is offset 480 px from
+                # the 1920-wide screen (matches the retail frame)
+                ip = dict(PARAM_RE.findall(ln))
+                if (ip.get('page') == 'fore' and ip.get('visible') == 'true'
+                        and ip.get('layer', '').isdigit()):
+                    im = sprites.get_sprite_rgba(m.group(1))
+                    left = float(ip.get('left', 0))
+                    frac = (left + 480 + (im.width / 2 if im else 0)) / 1920
+                    lay = 'x' + ip['layer'] + '@'
+                    flush_paras()
+                    for k in [k for k in spr_state.slots if k.startswith(lay)]:
+                        del spr_state.slots[k]
+                    spr_state.slots[f'{lay}{frac:.3f}'] = {
+                        'file': m.group(1), 'index': None, 'fliplr': False}
+                    emit_visual()
+                continue
             if m and is_background(ln, m.group(1)):
                 new = (m.group(1), bool(re.search(r'fliplr=(?:true|1)\b', ln)),
                        bool(re.search(r'flipud=(?:true|1)\b', ln)))
@@ -732,6 +766,21 @@ def parse_scene(text, slots):
                 continue
             if m.group(1) == 'movefg':
                 continue
+        mc = COND_RE.match(ln)
+        if mc and os.environ.get('FSN_NO_CONTRAST') != '1':
+            # colour filter (@nega/@monocro/@sepia; @condoff clears it). It
+            # shares the contrast slot: a later @contrast replaces it.
+            if mc.group(1) == 'condoff':
+                new_ct = None if isinstance(contrast[0], str) else contrast[0]
+            else:
+                new_ct = mc.group(1)
+            if new_ct != contrast[0]:
+                before = vkey()
+                contrast[0] = new_ct
+                if vkey() != before and (bg or fgcg):
+                    flush_paras()
+                    queue_visual()
+            continue
         if CONTRAST_RE.match(ln) and os.environ.get('FSN_NO_CONTRAST') != '1':
             # screen tone filter (@contrastT/@contrast set, off-variants
             # clear); the level persists across bg changes until turned off
@@ -1087,14 +1136,14 @@ def render_blocks(blocks, resolver, images):
                     # (content-addressed cache; result copied into the
                     # resolver cache dir so the ship loop picks it up
                     # like any other slide image)
-                    comp = sprites.composite(
-                        os.path.join(resolver.cachedir, got[0]), sprs)
-                    comp_bn = os.path.basename(comp)
-                    dest = os.path.join(resolver.cachedir, comp_bn)
-                    if not os.path.exists(dest):
-                        shutil.copy(comp, dest)
-                    cur_img = comp_bn
+                    comp, fut = sprites.composite_async(
+                        os.path.join(resolver.cachedir, got[0]), sprs,
+                        copy_to=resolver.cachedir)
+                    resolver.pending.append(fut)
+                    cur_img = os.path.basename(comp)
                 if b.get('ct') is not None:
+                    if cur_img != got[0]:
+                        fut.result()        # contrast reads the composite
                     # @contrast tone filter active on this slide; applied
                     # to the composited frame because the game's filter
                     # runs range=all (cast included)
@@ -1626,6 +1675,9 @@ def build_book(limit_parts=None, volume_title=None, out_name=None,
     with open(os.path.join(oebps, 'nav.xhtml'), 'w', encoding='utf-8') as f:
         f.write(xhtml('Contents', '\n'.join(toc)))
     manifest.append('  <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>')
+
+    for fut in resolver.pending:        # composites render in the background
+        fut.result()
 
     # images + generated per-image background rules (cre needs class-based
     # background-image; inline style attributes are not parsed)

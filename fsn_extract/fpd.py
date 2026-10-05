@@ -13,7 +13,7 @@ Format (per FatePackageManager + FSNr_tools):
   Then file data at dataStartPos+offset, each file XOR-scrambled individually
   from keystream index 0; if fullLength != 0 the content is zlib-compressed.
 """
-import io
+import mmap
 import zlib
 
 try:
@@ -29,8 +29,9 @@ class FPD:
     def __init__(self, path, keystream):
         self.path = path
         self.key = keystream
+        # mmap: packs are >1 GB; only the entries actually read get paged in
         with open(path, 'rb') as f:
-            raw = f.read()
+            raw = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
         self.raw = raw
         assert raw[:4] == b'FPD\x00', 'bad magic'
         self.version = int.from_bytes(raw[4:8], 'big')

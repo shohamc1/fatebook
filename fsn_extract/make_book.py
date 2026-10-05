@@ -15,6 +15,7 @@ ASCII-only directory.
 import argparse
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 try:
@@ -57,11 +58,18 @@ def main():
         from .book_model import build_book, VOLUMES
     except ImportError:
         from book_model import build_book, VOLUMES
-    for i, (vtitle, vparts, vout) in enumerate(VOLUMES, 1):
+    def build(i, vol):
+        vtitle, vparts, vout = vol
         print(f'=== Volume {vtitle} ===')
         build_book(limit_parts=vparts, volume_title=vtitle, out_name=vout,
                    work_dir=os.path.join(config.TEMP, f'book_work_v{i}'))
         print('built:', os.path.join(config.OUTPUT_DIR, vout))
+
+    # volumes are independent and share only content-addressed, atomically
+    # written image caches; image work releases the GIL, so threads scale
+    with ThreadPoolExecutor(len(VOLUMES)) as ex:
+        for f in [ex.submit(build, i, v) for i, v in enumerate(VOLUMES, 1)]:
+            f.result()
 
 
 if __name__ == '__main__':

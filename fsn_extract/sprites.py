@@ -47,16 +47,19 @@ import io
 import json
 import os
 import re
+import shutil
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from PIL import Image, ImageOps
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 try:
-    from .config import TEMP, BLADE, KEY_BIN
+    from .config import TEMP, BLADE, KEY_BIN, save_atomic, write_atomic
 except ImportError:  # run as a plain script
     sys.path.insert(0, ROOT)
-    from config import TEMP, BLADE, KEY_BIN  # noqa: E402
+    from config import TEMP, BLADE, KEY_BIN, save_atomic, write_atomic  # noqa: E402
 
 KAG_DIR = os.path.join(TEMP, 'kag_all')
 IMG_DIR = os.path.join(TEMP, 'img')          # read-only
@@ -83,6 +86,19 @@ POS_ANCHOR = {'left': 0.28, 'leftcenter': 0.39, 'center': 0.50,
 # z-order fallback when an @ld line lacks index=
 POS_DEFAULT_INDEX = {'left': 1000, 'leftcenter': 2000, 'center': 3000,
                      'rightcenter': 4000, 'right': 5000}
+
+
+def pos_anchor(pos):
+    """x centre as a canvas fraction. Besides the five named slots, an
+    image-layer sprite sits at 'x<layer>@<fraction>' (see layer_pos)."""
+    return POS_ANCHOR[pos] if pos in POS_ANCHOR else float(pos.split('@')[1])
+
+
+def pos_index(pos):
+    # image-layer sprites sit behind the @ld cast
+    return POS_DEFAULT_INDEX.get(pos, 500)
+
+
 POS_ALIAS = {'l': 'left', 'left': 'left',
              'lc': 'leftcenter', 'leftcenter': 'leftcenter',
              'c': 'center', 'center': 'center',
@@ -98,10 +114,10 @@ CL_CMDS = ('cl', 'cl_auto', 'clnotrans', 'cl_notrans', 'clfg')
 # every command that mutates the standing-cast slots (book_model dispatch)
 SPRITE_CMDS = {'ld', 'ld_auto', 'ldnotrans', 'ld_notrans', 'fg', 'chgfg',
                'cl', 'cl_auto', 'clnotrans', 'cl_notrans', 'clfg', 'cl_fadein'}
-# character sprites always start with kana/kanji, contain a digit and carry a
-# distance suffix (遠/中/近); everything else placed on character slots is an
+# character sprites always start with kana/kanji and carry a distance suffix
+# (遠/中/近); digit-less ones exist (士郎制服(中)); everything else placed on character slots is an
 # effect overlay (シネスコ letterbox, damage flashes, colors, cut-ins)
-SPRITE_NAME_RE = re.compile(r'^[ぁ-ヿ一-鿿].*\d.*\([遠中近]\)$')
+SPRITE_NAME_RE = re.compile(r'^[ぁ-ヿ一-鿿].*\([遠中近]\)$')
 
 
 def is_sprite_name(name):
@@ -150,12 +166,14 @@ class ManifestIndex:
 
 
 _MANIFEST = None
+_MANIFEST_LOCK = threading.Lock()
 
 
 def manifests():
     global _MANIFEST
-    if _MANIFEST is None:
-        _MANIFEST = ManifestIndex()
+    with _MANIFEST_LOCK:
+        if _MANIFEST is None:
+            _MANIFEST = ManifestIndex()
     return _MANIFEST
 
 
@@ -183,8 +201,7 @@ def _blob_path(datname, warnings):
         for i, (name, _off, _ln, _fl) in enumerate(fpd.entries):
             if name == entry:
                 data = fpd.read_entry(i)[1]
-                with open(cached, 'wb') as f:
-                    f.write(data)
+                write_atomic(cached, data)
                 return cached
         warnings.append(f'entry {entry} not found in {pack}.bin')
     except Exception as e:                     # pragma: no cover
@@ -192,17 +209,24 @@ def _blob_path(datname, warnings):
     return None
 
 
-def _blob_handle(datname, warnings):
-    path = _blob_path(datname, warnings)
-    if path is None:
-        return None
-    if datname not in _BLOBS:
-        try:
-            _BLOBS[datname] = open(path, 'rb')
-        except OSError as e:
-            warnings.append(f'cannot open {path}: {e}')
+_BLOB_LOCK = threading.Lock()   # handles are shared: seek+read must be atomic
+
+
+def _read_blob(datname, off, size, warnings):
+    """bytes of one blob entry, or None if the dat can't be opened"""
+    with _BLOB_LOCK:
+        path = _blob_path(datname, warnings)
+        if path is None:
             return None
-    return _BLOBS[datname]
+        if datname not in _BLOBS:
+            try:
+                _BLOBS[datname] = open(path, 'rb')
+            except OSError as e:
+                warnings.append(f'cannot open {path}: {e}')
+                return None
+        fh = _BLOBS[datname]
+        fh.seek(off)
+        return fh.read(size)
 
 
 # ---------------------------------------------------------------- images
@@ -215,6 +239,10 @@ def _safe_name(name):
     return f'{base}_{hashlib.md5(name.encode("utf-8")).hexdigest()[:6]}'
 
 
+_SPRITE_LOCK = threading.Lock()         # guards _SPRITE_MEM and _NAME_LOCKS
+_NAME_LOCKS = {}                        # name -> lock: decode each sprite once
+
+
 def get_sprite_rgba(name, warnings=None):
     """Decode a character sprite webp to RGBA, applying the manifest render
     scale (ex_pack sprites carry scale=1.128125 -> divide stored size by it;
@@ -222,32 +250,37 @@ def get_sprite_rgba(name, warnings=None):
     Raw webp extracts are cached under cache/sprites/.  Decoded sprites are
     LRU-capped: a full-book build touches ~1,500 of them (~3 GB as RGBA)."""
     warnings = warnings if warnings is not None else WARNINGS
-    if name in _SPRITE_MEM:
-        im = _SPRITE_MEM.pop(name)      # move-to-end (LRU)
-        _SPRITE_MEM[name] = im
-        return im
-    ent = manifests().lookup(name)
-    if ent is None:
-        warnings.append(f'sprite not in manifest: {name}')
-        return None
-    datname, off, size, scale = ent
-    webp_path = os.path.join(SPRITE_CACHE_DIR, _safe_name(name) + '.webp')
-    if not os.path.exists(webp_path):
-        fh = _blob_handle(datname, warnings)
-        if fh is None:
+    with _SPRITE_LOCK:
+        if name in _SPRITE_MEM:
+            im = _SPRITE_MEM.pop(name)      # move-to-end (LRU)
+            _SPRITE_MEM[name] = im
+            return im
+        name_lock = _NAME_LOCKS.setdefault(name, threading.Lock())
+    with name_lock:
+        with _SPRITE_LOCK:
+            im = _SPRITE_MEM.get(name)
+        if im is not None:                  # decoded while we waited
+            return im
+        ent = manifests().lookup(name)
+        if ent is None:
+            warnings.append(f'sprite not in manifest: {name}')
             return None
-        fh.seek(off)
-        raw = fh.read(size)
-        with open(webp_path, 'wb') as f:
-            f.write(raw)
-    im = Image.open(webp_path).convert('RGBA')
-    if scale != 1.0:
-        im = im.resize((max(1, round(im.width / scale)),
-                        max(1, round(im.height / scale))), Image.LANCZOS)
-    _SPRITE_MEM[name] = im
-    while len(_SPRITE_MEM) > 160:
-        _SPRITE_MEM.pop(next(iter(_SPRITE_MEM)))
-    return im
+        datname, off, size, scale = ent
+        webp_path = os.path.join(SPRITE_CACHE_DIR, _safe_name(name) + '.webp')
+        if not os.path.exists(webp_path):
+            raw = _read_blob(datname, off, size, warnings)
+            if raw is None:
+                return None
+            write_atomic(webp_path, raw)
+        im = Image.open(webp_path).convert('RGBA')
+        if scale != 1.0:
+            im = im.resize((max(1, round(im.width / scale)),
+                            max(1, round(im.height / scale))), Image.LANCZOS)
+        with _SPRITE_LOCK:
+            _SPRITE_MEM[name] = im
+            while len(_SPRITE_MEM) > 160:
+                _SPRITE_MEM.pop(next(iter(_SPRITE_MEM)))
+        return im
 
 
 def bg_jpg_name(name):
@@ -277,17 +310,16 @@ def get_bg_jpg(name, warnings=None, flipped=False):
         warnings.append(f'bg not in manifest: {name}')
         return None
     datname, off, size, _scale = ent
-    fh = _blob_handle(datname, warnings)
-    if fh is None:
+    raw = _read_blob(datname, off, size, warnings)
+    if raw is None:
         return None
-    fh.seek(off)
-    im = Image.open(io.BytesIO(fh.read(size))).convert('RGB')
+    im = Image.open(io.BytesIO(raw)).convert('RGB')
     if flipped:
         im = ImageOps.mirror(im)
     if im.width > CANVAS_W:
         im = im.resize((CANVAS_W, round(im.height * CANVAS_W / im.width)),
                        Image.LANCZOS)
-    im.save(cached, quality=86)
+    save_atomic(im, cached, quality=86)
     return cached
 
 
@@ -419,17 +451,14 @@ class SpriteState:
                             for p, s in self.slots.items()))
 
     def soft_key(self):
-        """Slide-emission key: expression/pose variants of one outfit collapse
-        to base identity; strong visual states stay exact."""
-        return tuple(sorted(
-            (p, s['file'] if STRONG_VARIANT_RE.search(s['file'])
-             else base_key(s['file']))
-            for p, s in self.slots.items()))
+        """Slide-emission key: the exact cast, so every expression or pose
+        change starts a new slide, as in retail."""
+        return self.key()
 
     def snapshot(self):
         """Composite-ready slot list (default z-order filled in)."""
         return [{'file': s['file'], 'pos': p,
-                 'index': s['index'] or POS_DEFAULT_INDEX[p],
+                 'index': s['index'] or pos_index(p),
                  'fliplr': s['fliplr']}
                 for p, s in sorted(self.slots.items())]
 
@@ -539,9 +568,54 @@ _COMPOSITE_KEYS = {}     # key -> output filename
 # canvas — the tallest clip the top edge, which the game never does.  The
 # game's own framing (text window covers the bottom 30%) puts standing
 # characters at ~75-85%; scale to 0.85 with feet on a 3% floor line.
-STANDING_SCALE = 0.85
-FEET_LINE = 0.97
-KEY_VERSION = 'v2'       # bump to invalidate stale composite caches
+STANDING_SCALE = 1.0
+FEET_LINE = 1.12     # retail crops the feet: bottom edge sits below the frame
+HEAD_MARGIN = 0.03       # tallest whole-head sprites sit 3% below the top
+KEY_VERSION = 'v6'       # bump to invalidate stale composite caches
+
+
+_PLACED = {}                    # (file, fliplr, W, H) -> sized sprite
+_PLACED_LOCK = threading.Lock()
+
+
+def _placed_sprite(name, fliplr, W, H):
+    """Sprite flipped and scaled for a W x H canvas, or None if it can't be
+    resolved.  The result depends only on the arguments, so composites
+    that share a cast member reuse it (read-only: callers only paste it)."""
+    key = (name, fliplr, W, H)
+    with _PLACED_LOCK:
+        im = _PLACED.pop(key, None)
+        if im is not None:
+            _PLACED[key] = im               # move-to-end (LRU)
+            return im
+    im = get_sprite_rgba(name)
+    if im is None:
+        return None
+    im = im.copy()
+    if fliplr:
+        im = ImageOps.mirror(im)
+    if im.width > MAX_SPRITE_W_FRAC * W:
+        nw = int(MAX_SPRITE_W_FRAC * W)
+        im = im.resize((nw, round(im.height * nw / im.width)), Image.LANCZOS)
+    # standing calibration: game shows the cast smaller than manifest
+    # native size; nothing may exceed 94% of the canvas height
+    im = im.resize((max(1, round(im.width * STANDING_SCALE)),
+                    max(1, round(im.height * STANDING_SCALE))), Image.LANCZOS)
+    with _PLACED_LOCK:
+        _PLACED[key] = im
+        while len(_PLACED) > 400:
+            _PLACED.pop(next(iter(_PLACED)))
+    return im
+
+
+def _composite_path(bg_jpg_path, wanted, bgcolor):
+    """content-addressed cache path of a composite"""
+    bg_key = os.path.basename(bg_jpg_path) if bg_jpg_path else f'flat:{bgcolor}'
+    sprite_key = '|'.join(sorted(f"{s['pos']}:{s['file']}:{s['index']}:{s['fliplr']}"
+                                 for s in wanted))
+    key = hashlib.md5((KEY_VERSION + bg_key + '#' + sprite_key)
+                      .encode('utf-8')).hexdigest()[:16]
+    return os.path.join(CACHE_DIR, f'comp_{key}.webp')
 
 
 def composite(bg_jpg_path, sprites, bgcolor=None):
@@ -556,12 +630,7 @@ def composite(bg_jpg_path, sprites, bgcolor=None):
     skipped (and logged to WARNINGS).
     """
     wanted = [s for s in sprites if s and s.get('file')]
-    bg_key = os.path.basename(bg_jpg_path) if bg_jpg_path else f'flat:{bgcolor}'
-    sprite_key = '|'.join(sorted(f"{s['pos']}:{s['file']}:{s['index']}:{s['fliplr']}"
-                                 for s in wanted))
-    key = hashlib.md5((KEY_VERSION + bg_key + '#' + sprite_key)
-                      .encode('utf-8')).hexdigest()[:16]
-    out = os.path.join(CACHE_DIR, f'comp_{key}.webp')
+    out = _composite_path(bg_jpg_path, wanted, bgcolor)
     if os.path.exists(out):
         return out
 
@@ -572,31 +641,22 @@ def composite(bg_jpg_path, sprites, bgcolor=None):
         canvas = Image.new('RGBA', (CANVAS_W, CANVAS_H), rgb + (255,))
 
     W, H = canvas.size
-    live = []
+    placed = {}
     for s in wanted:
-        im = get_sprite_rgba(s['file'])
+        im = _placed_sprite(s['file'], bool(s.get('fliplr')), W, H)
         if im is not None:
-            live.append(s)
+            placed[id(s)] = im
+    live = [s for s in wanted if id(s) in placed]
     for s in sorted(live, key=lambda s: (s['index'] if s['index'] is not None
-                                         else POS_DEFAULT_INDEX[s['pos']])):
-        im = get_sprite_rgba(s['file']).copy()
-        if s.get('fliplr'):
-            im = ImageOps.mirror(im)
-        if im.width > MAX_SPRITE_W_FRAC * W:
-            nw = int(MAX_SPRITE_W_FRAC * W)
-            im = im.resize((nw, round(im.height * nw / im.width)), Image.LANCZOS)
-        # standing calibration: game shows the cast smaller than manifest
-        # native size; nothing may exceed 94% of the canvas height
-        im = im.resize((max(1, round(im.width * STANDING_SCALE)),
-                        max(1, round(im.height * STANDING_SCALE))), Image.LANCZOS)
-        if im.height > 0.94 * H:
-            im = im.resize((max(1, round(im.width * 0.94 * H / im.height)),
-                            round(0.94 * H)), Image.LANCZOS)
-        anchor = POS_ANCHOR[s['pos']]
+                                         else pos_index(s['pos']))):
+        im = placed[id(s)]
+        anchor = pos_anchor(s['pos'])
         x = int(round(anchor * W - im.width / 2))
-        y = int(round(FEET_LINE * H)) - im.height   # feet on the floor line
-        if y < 0:
-            y = 0
+        y = int(round(FEET_LINE * H)) - im.height   # feet below the frame
+        if im.getchannel('A').crop((0, 0, im.width, 1)).getextrema()[1] > 128:
+            y = min(y, 0)        # asset is cut at its top: hide the cut
+        else:
+            y = max(y, int(HEAD_MARGIN * H))        # whole head: keep it in
         overlay = Image.new('RGBA', (W, H), (0, 0, 0, 0))
         overlay.paste(im, (x, y))
         canvas = Image.alpha_composite(canvas, overlay)
@@ -608,8 +668,42 @@ def composite(bg_jpg_path, sprites, bgcolor=None):
     if canvas.width > 1280:
         canvas = canvas.resize((1280, round(canvas.height * 1280 / canvas.width)),
                                Image.LANCZOS)
-    canvas.save(out, format='WEBP', quality=78, method=4)
+    save_atomic(canvas, out, format='WEBP', quality=78, method=4)
     return out
+
+
+_POOL = None
+_INFLIGHT = {}                  # out path -> Future
+_INFLIGHT_LOCK = threading.Lock()
+
+
+def composite_async(bg_jpg_path, sprites, bgcolor=None, copy_to=None):
+    """Queue composite() on a thread pool (PIL releases the GIL) and return
+    (out path, Future).  Identical requests share one job.  With copy_to,
+    the job also copies the result into that directory; the Future
+    resolves to the composite's path in the cache."""
+    global _POOL
+    sprites = [s for s in sprites if s and s.get('file')]
+    out = _composite_path(bg_jpg_path, sprites, bgcolor)
+
+    def job():
+        composite(bg_jpg_path, sprites, bgcolor)
+        if copy_to:
+            dest = os.path.join(copy_to, os.path.basename(out))
+            if not os.path.exists(dest):
+                tmp = dest + f'.{threading.get_ident()}.tmp'
+                shutil.copyfile(out, tmp)
+                os.replace(tmp, dest)
+        return out
+
+    with _INFLIGHT_LOCK:
+        if _POOL is None:
+            _POOL = ThreadPoolExecutor(os.cpu_count() or 4)
+        key = (out, copy_to)
+        fut = _INFLIGHT.get(key)
+        if fut is None:
+            fut = _INFLIGHT[key] = _POOL.submit(job)
+    return out, fut
 
 
 # ================================================================ text
@@ -688,7 +782,7 @@ def render_poc(chapter=POC_CHAPTER, max_beats=MAX_BEATS_PER_SCRIPT):
                 continue
             bg_path = get_bg_jpg(beat['bg'], warnings)
             slots = [{'file': slot['file'], 'pos': pos,
-                      'index': slot['index'] or POS_DEFAULT_INDEX[pos],
+                      'index': slot['index'] or pos_index(pos),
                       'fliplr': slot['fliplr']}
                      for pos, slot in beat['sprites'].items()]
             path = composite(bg_path, slots, bgcolor=beat['bg_color'])

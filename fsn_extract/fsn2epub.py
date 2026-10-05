@@ -22,10 +22,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 try:
     from .fpd import FPD, load_key
-    from .config import BLADE, MAIN_EXE, KEY_BIN, TEMP
+    from .config import BLADE, MAIN_EXE, KEY_BIN, TEMP, save_atomic, write_atomic
 except ImportError:  # run as a plain script
     from fpd import FPD, load_key  # noqa: E402
-    from config import BLADE, MAIN_EXE, KEY_BIN, TEMP  # noqa: E402
+    from config import BLADE, MAIN_EXE, KEY_BIN, TEMP, save_atomic, write_atomic  # noqa: E402
 
 WORK = os.path.join(TEMP, 'epub_work')
 
@@ -63,7 +63,7 @@ class ImageResolver:
     """Resolves .ks storage names (04突き etc.) to jpeg files via the
     fileinfo_* manifests + pack/*.dat blobs."""
 
-    def __init__(self, cachedir='img'):
+    def __init__(self, cachedir=os.path.join(TEMP, 'img')):
         self.cachedir = cachedir
         os.makedirs(cachedir, exist_ok=True)
         self.entries = {}          # name -> (dat, offset, size)
@@ -80,6 +80,7 @@ class ImageResolver:
         # vs manifest 'b16'); 462 of 1350 referenced names differ in case
         self.entries_lower = {k.lower(): v for k, v in self.entries.items()}
         self.used = {}             # logical name -> embedded filename
+        self.pending = []          # sprites.composite_async futures
 
     def _lookup(self, name):
         if name in self.entries:
@@ -94,8 +95,7 @@ class ImageResolver:
             p = FPD(os.path.join(BLADE, f'{pack}.bin'), None)
             for i, (name, off, ln, fl) in enumerate(p.entries):
                 if name == entry:
-                    with open(local, 'wb') as f:
-                        f.write(p.read_entry(i)[1])
+                    write_atomic(local, p.read_entry(i)[1])
                     break
             else:
                 raise SystemExit(f'dat blob not found: {entry}')
@@ -135,7 +135,7 @@ class ImageResolver:
         if im.width > 1600:
             im = im.resize((1600, round(im.height * 1600 / im.width)),
                            Image.LANCZOS)
-        im.save(out, quality=86)
+        save_atomic(im, out, quality=86)
         self.used[key] = (fn, im.width, im.height)
         return self.used[key]
 
