@@ -1,7 +1,7 @@
 # fatebook — build the FSNr EPK decryptor, then run the pipeline.
 #
 # Targets:
-#   make tool    clone + compile FSNr_tools (g++ / Apple Clang / mingw)
+#   make tool    init submodules + compile FSNr_tools (g++ / Apple Clang / mingw)
 #   make run     extract the game data and build the EPUBs (uv run fsn-book)
 #   make         same as make run
 #   make clean   remove all build output (extracted data, work dirs, books)
@@ -20,7 +20,7 @@ run: tool
 tool: $(FSNR_EXE)
 
 $(FSNR_EXE):
-	git clone https://github.com/kurikomoe/FSNr_tools $(FSNR_DIR)
+	git submodule update --init --depth 1 $(FSNR_DIR)
 	mkdir -p $(FSNR_DIR)/build
 	cd $(FSNR_DIR) && \
 		g++ --std=c++20 -O2 main.cpp -o build/main$(if $(filter Windows_NT,$(OS)),.exe)

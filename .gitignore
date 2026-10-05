@@ -8,9 +8,10 @@
 /config.toml
 
 # Vendored third-party repos — keep their own git history, see README.md
+# (tools_fsnr is a pinned git submodule; build products inside it stay ignored
+# via its own .gitignore)
 /crengine_src/
 /tools_fpm/
-/tools_fsnr/
 
 # Build/output guards anywhere in the repo
 *.log

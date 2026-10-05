@@ -1,0 +1,4 @@
+[submodule "tools_fsnr"]
+	path = tools_fsnr
+	url = https://github.com/kurikomoe/FSNr_tools
+	ignore = dirty
