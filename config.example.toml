@@ -4,8 +4,9 @@
 # layout (directories next to fsn_extract/).
 
 [paths]
-# Directory holding the game's FPD packs (*.bin). Default: Blade/obb
-#blade = r'C:\Games\FateSN\Blade\obb'
+# Directory holding the game (the Blade folder; its obb/ subfolder is
+# appended automatically if the packs aren't found directly in it)
+#blade = r'C:\Games\FateSN\Blade'
 
 # FSNr_tools EPK decryptor. Default: tools_fsnr/build/main.exe
 #main_exe = r'C:\tools\fsnr\build\main.exe'

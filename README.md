@@ -17,11 +17,48 @@ eReader use.
 
 ## Usage
 
-Point `config.toml` at the game (copy
-[`config.example.toml`](config.example.toml) to `config.toml` and set
-`blade`), then:
+Setup per platform (installs [uv](https://docs.astral.sh/uv/),
+a C++ compiler and `git`):
 
-    python fsn_extract/make_book.py
+macOS:
+
+```sh
+xcode-select --install --no-sudo 2>/dev/null; \
+curl -LsSf https://astral.sh/uv/install.sh | sh && exec $SHELL -l
+```
+
+Debian:
+
+```sh
+sudo apt update && sudo apt install -y build-essential git && \
+curl -LsSf https://astral.sh/uv/install.sh | sh && exec $SHELL -l
+```
+
+Windows (PowerShell, run as admin):
+
+```powershell
+winget install -e --id Git.Git; winget install -e --id Microsoft.VisualStudio.2022.BuildTools --override "--add Microsoft.VisualStudio.Workload.VCTools --passive"; winget install -e --id astral-sh.uv
+```
+
+Then point `config.toml` at the game (copy
+[`config.example.toml`](config.example.toml) and set `blade` to the
+game's Blade folder) and build:
+
+    make
+
+You can also run steps individually:
+
+    make tool    # clone + compile the FSNr decryptor (native binary)
+    make run     # uv run fsn-book && uv run fsn-validate
+
+```sh
+uv sync
+uv run fsn-book
+uv run fsn-validate
+```
+
+Finished EPUBs land in `output/`; all intermediate data (extracted
+game data, work dirs) goes to `output/temp/`.
 
 ## Credits
 

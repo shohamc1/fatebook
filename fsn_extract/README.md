@@ -3,18 +3,19 @@
 Scripts that turn *Fate/stay night REMASTERED* (Steam appid 2396980,
 v1.4.0.388; engine "fsn2", KiriKiri/KAG-based) into a branch-aware EPUB.
 Setup and usage live in the [repo README](../README.md) — the short
-version: point `config.toml` at the game, run
-`python fsn_extract/make_book.py`.
+version: point `config.toml` at the game, run `make` (or
+`uv run fsn-book`).
 
 ## Flow
 
 1. `extract_all.py` reads the game's FPD packs and writes the working
-   data: `kag_all/` (.ks/.fcf scenario scripts, patch versions winning
+   data to `../output/temp/`: `kag_all/` (.ks/.fcf scenario scripts,
+   patch versions winning
    over base), `raw/us_epks/` (English text archives, decrypted via
-   FSNr `main.exe`), `img/*.dat` CG blobs and the `fileinfo_*.txt`
+   FSNr `main`), `img/*.dat` CG blobs and the `fileinfo_*.txt`
    manifests.
 2. `book_model.build_book()` decodes scripts + text + flowcharts and
-   renders the book into `book/`: 3 volumes plus the single-file
+   renders the book into `../output/`: 3 volumes plus the single-file
    branch-aware edition (6 parts, 54 chapters, 728 scene sections,
    440 art plates, 717 internal links).
 3. `validate_book.py` checks the built tree (must print errors: 0).

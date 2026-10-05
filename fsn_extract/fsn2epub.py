@@ -20,10 +20,14 @@ import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from fpd import FPD, load_key  # noqa: E402
-from config import BLADE, MAIN_EXE, KEY_BIN  # noqa: E402
+try:
+    from .fpd import FPD, load_key
+    from .config import BLADE, MAIN_EXE, KEY_BIN, TEMP
+except ImportError:  # run as a plain script
+    from fpd import FPD, load_key  # noqa: E402
+    from config import BLADE, MAIN_EXE, KEY_BIN, TEMP  # noqa: E402
 
-WORK = os.path.join(HERE, 'epub_work')
+WORK = os.path.join(TEMP, 'epub_work')
 
 # Voice codes -> display names (official English spellings)
 SPEAKERS = {
@@ -64,7 +68,7 @@ class ImageResolver:
         os.makedirs(cachedir, exist_ok=True)
         self.entries = {}          # name -> (dat, offset, size)
         for fi in FILEINFOS:
-            path = os.path.join(HERE, fi)
+            path = os.path.join(TEMP, fi)
             if not os.path.exists(path):
                 continue
             for line in open(path, encoding='utf-8'):
@@ -581,5 +585,5 @@ if __name__ == '__main__':
     resolver = ImageResolver()
     for p in pages:
         print('page bg:', p['bg'])
-    build_epub(pages, os.path.join(HERE, 'FateStayNight_Prologue_sample.epub'),
+    build_epub(pages, os.path.join(TEMP, 'FateStayNight_Prologue_sample.epub'),
                resolver=resolver)

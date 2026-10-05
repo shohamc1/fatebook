@@ -27,8 +27,14 @@ from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import config  # noqa: E402
-from fpd import FPD, load_key  # noqa: E402
+try:
+    from . import config
+    from .config import TEMP
+    from .fpd import FPD, load_key
+except ImportError:  # run as a plain script
+    import config  # noqa: E402
+    from config import TEMP  # noqa: E402
+    from fpd import FPD, load_key  # noqa: E402
 
 
 def _put(path, data, force=False):
@@ -47,7 +53,8 @@ def _put(path, data, force=False):
     return True
 
 
-def extract(dest=HERE, force=False):
+def extract(dest=None, force=False):
+    dest = dest or TEMP
     load_key(config.KEY_BIN)
     kag_dir = os.path.join(dest, 'kag_all')
     epk_dir = os.path.join(dest, 'raw', 'us_epks')
@@ -144,7 +151,7 @@ def extract(dest=HERE, force=False):
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument('--dest', default=HERE,
+    ap.add_argument('--dest', default=TEMP,
                     help='output root (default: next to this script)')
     ap.add_argument('--force', action='store_true',
                     help='re-extract and re-decrypt even if files exist')

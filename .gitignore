@@ -17,6 +17,10 @@
 *.epub
 __pycache__/
 *.pyc
+/output/
+.venv/
+.fsbook
+sprites_preview/
 
 # ZCode editor session config (contains only tool defaults)
 .zcodeignore

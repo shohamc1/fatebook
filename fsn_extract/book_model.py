@@ -25,15 +25,22 @@ import sys
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
-from fsn2epub import (SPEAKERS, TAG_RE, smart_quotes, ImageResolver,
-                      MAIN_EXE, KEY_BIN)
+try:
+    from .fsn2epub import (SPEAKERS, TAG_RE, smart_quotes, ImageResolver,
+                           MAIN_EXE, KEY_BIN)
+    from .config import TEMP
+except ImportError:  # run as a plain script
+    sys.path.insert(0, HERE)
+    from fsn2epub import (SPEAKERS, TAG_RE, smart_quotes, ImageResolver,  # noqa: E402
+                          MAIN_EXE, KEY_BIN)
+    from config import TEMP  # noqa: E402
 import sprites
 
-KAG = os.path.join(HERE, 'kag_all')
-STATIC_DEC = os.path.join(HERE, 'raw', 'us_epks', 'statictext.epk_dec')
-OUT_DIR = os.path.join(HERE, 'book')
-WORK = os.path.join(HERE, 'book_work')
+IMG = os.path.join(TEMP, 'img')
+KAG = os.path.join(TEMP, 'kag_all')
+STATIC_DEC = os.path.join(TEMP, 'raw', 'us_epks', 'statictext.epk_dec')
+OUT_DIR = os.path.join(os.path.dirname(HERE), 'output')  # == config.OUTPUT_DIR
+WORK = os.path.join(TEMP, 'book_work')
 
 # ---------------------------------------------------------------- text DB
 def load_flowtext():
@@ -59,7 +66,7 @@ def script_slots(script_name):
     epk = SCRIPT_EPK_MAP.get(script_name)
     slots = {}
     if epk:
-        path = os.path.join(HERE, 'raw', 'us_epks', epk + '.epk_dec')
+        path = os.path.join(TEMP, 'raw', 'us_epks', epk + '.epk_dec')
         pat = re.compile(r'^\d+::\$\$\$(message_\d+_\d+_\d+)\$\$\$::(.*)::\s*$')
         try:
             for line in open(path, encoding='utf-8'):
@@ -303,7 +310,7 @@ _DIM_RESOLVER = []
 
 def _art_resolver():
     if not _DIM_RESOLVER:
-        _DIM_RESOLVER.append(ImageResolver(os.path.join(HERE, 'img')))
+        _DIM_RESOLVER.append(ImageResolver(IMG))
     return _DIM_RESOLVER[0]
 
 
@@ -995,7 +1002,7 @@ def render_blocks(blocks, resolver, images):
     em_open = False
     aside_reopen = [False]
     # fixed art present in this source tree? (checked once per scene)
-    deadend_ok = os.path.exists(os.path.join(HERE, 'img', 'dead_end.jpg'))
+    deadend_ok = os.path.exists(os.path.join(IMG, 'dead_end.jpg'))
     deadend_shown = [False]   # DEAD END card goes in once per scene
 
     def flush():
@@ -1458,7 +1465,7 @@ def build_book(limit_parts=None, volume_title=None, out_name=None,
     # keyed by movie base name for render_blocks
     global BOOK_POSTERS
     POSTERS = {n: f'poster_op{n}' for n in ('01', '02', '03')
-               if os.path.exists(os.path.join(HERE, 'img',
+               if os.path.exists(os.path.join(IMG,
                                               f'poster_op{n}.jpg'))}
     BOOK_POSTERS = {f'op{n}': p for n, p in POSTERS.items()}
 
@@ -1480,7 +1487,7 @@ def build_book(limit_parts=None, volume_title=None, out_name=None,
     os.makedirs(os.path.join(oebps, 'images'))
     os.makedirs(os.path.join(oebps, 'text'))
     # EPUB cover (optional): copy + manifest item; absent cover is fine
-    cover_src = os.path.join(HERE, 'img', 'cover.jpg')
+    cover_src = os.path.join(IMG, 'cover.jpg')
     has_cover = os.path.exists(cover_src)
     if has_cover:
         link_or_copy(cover_src, os.path.join(oebps, 'cover.jpg'))
@@ -1639,7 +1646,7 @@ def build_book(limit_parts=None, volume_title=None, out_name=None,
     # fixed presentation art (DEAD END card, movie posters): copied whenever
     # present and manifested, so inline ../images/*.jpg links always validate
     for art in ['dead_end.jpg'] + [f'{p}.jpg' for p in POSTERS.values()]:
-        src = os.path.join(HERE, 'img', art)
+        src = os.path.join(IMG, art)
         if os.path.exists(src):
             link_or_copy(src, os.path.join(oebps, 'images', art))
             iid = 'i' + re.sub(r'\W', '_', art[:-4])
@@ -1709,7 +1716,7 @@ if __name__ == '__main__':
         print(f'=== Volume {vtitle} ===')
         kwargs = dict(limit_parts=vparts, volume_title=vtitle,
                       out_name=args.out or vout,
-                      work_dir=os.path.join(HERE, f'book_work_v{i}'))
+                      work_dir=os.path.join(TEMP, f'book_work_v{i}'))
         if args.chapters:
             kwargs['limit_parts'] = None
             kwargs['_limit_chapters'] = args.chapters

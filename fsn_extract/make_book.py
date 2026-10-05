@@ -6,7 +6,7 @@ Point config.toml at the game (see config.example.toml), then run:
 
 Extracts the scenario scripts, English text archives and CG data from the
 game's FPD packs (skipping anything already extracted), builds the three
-volumes into book/, and lists the outputs. Check the result with
+volumes into ../output/, and lists the outputs. Check the result with
 validate_book.py (must print errors: 0).
 
 FSNr main.exe requires ASCII paths — keep the repo under an
@@ -17,8 +17,11 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
-import config  # noqa: E402
+try:
+    from . import config
+except ImportError:  # run as a plain script
+    sys.path.insert(0, HERE)
+    import config  # noqa: E402
 
 
 def main():
@@ -40,19 +43,25 @@ def main():
         sys.exit('missing:\n  ' + '\n  '.join(missing))
 
     if not args.no_extract:
-        import extract_all
-        stats = extract_all.extract(HERE, force=args.force)
+        try:
+            from . import extract_all
+        except ImportError:
+            import extract_all
+        stats = extract_all.extract(config.TEMP, force=args.force)
         print('extraction:', stats)
 
     if args.extract_only:
         return
 
-    from book_model import build_book, VOLUMES
+    try:
+        from .book_model import build_book, VOLUMES
+    except ImportError:
+        from book_model import build_book, VOLUMES
     for i, (vtitle, vparts, vout) in enumerate(VOLUMES, 1):
         print(f'=== Volume {vtitle} ===')
         build_book(limit_parts=vparts, volume_title=vtitle, out_name=vout,
-                   work_dir=os.path.join(HERE, f'book_work_v{i}'))
-        print('built:', os.path.join(HERE, 'book', vout))
+                   work_dir=os.path.join(config.TEMP, f'book_work_v{i}'))
+        print('built:', os.path.join(config.OUTPUT_DIR, vout))
 
 
 if __name__ == '__main__':

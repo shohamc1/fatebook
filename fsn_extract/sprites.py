@@ -52,16 +52,20 @@ import sys
 from PIL import Image, ImageOps
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-KAG_DIR = os.path.join(ROOT, 'kag_all')
-IMG_DIR = os.path.join(ROOT, 'img')            # read-only
-PREVIEW_DIR = os.path.join(ROOT, 'sprites_preview')
+try:
+    from .config import TEMP, BLADE, KEY_BIN
+except ImportError:  # run as a plain script
+    sys.path.insert(0, ROOT)
+    from config import TEMP, BLADE, KEY_BIN  # noqa: E402
+
+KAG_DIR = os.path.join(TEMP, 'kag_all')
+IMG_DIR = os.path.join(TEMP, 'img')          # read-only
+PREVIEW_DIR = os.path.join(TEMP, 'sprites_preview')
 CACHE_DIR = os.path.join(PREVIEW_DIR, 'cache')
 SPRITE_CACHE_DIR = os.path.join(CACHE_DIR, 'sprites')
-EPK_DIR = os.path.join(ROOT, 'raw', 'us_epks')
+os.makedirs(SPRITE_CACHE_DIR, exist_ok=True)
+EPK_DIR = os.path.join(TEMP, 'raw', 'us_epks')
 EPK_MAP = os.path.join(ROOT, 'script_epk_map.json')
-
-sys.path.insert(0, ROOT)
-from config import BLADE, KEY_BIN
 
 # manifest order matters: later manifests override earlier ones (patch wins)
 MANIFESTS = ['fileinfo_fileinfo_ex_pack.txt', 'fileinfo_saber.txt',
@@ -120,7 +124,7 @@ class ManifestIndex:
     def __init__(self):
         self.exact = {}                     # name -> (dat, offset, size, scale)
         for fi in MANIFESTS:
-            path = os.path.join(ROOT, fi)
+            path = os.path.join(TEMP, fi)
             if not os.path.exists(path):
                 continue
             for line in open(path, encoding='utf-8'):

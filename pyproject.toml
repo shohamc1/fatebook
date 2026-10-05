@@ -1,0 +1,22 @@
+[project]
+name = "fatebook"
+version = "1.0.0"
+description = "Convert Fate/stay night REMASTERED into a branch-aware EPUB"
+requires-python = ">=3.11"
+dependencies = [
+    "pillow>=10.0",
+]
+
+[project.scripts]
+fsn-book = "fsn_extract.make_book:main"
+fsn-validate = "fsn_extract.validate_book:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["fsn_extract"]
+
+[tool.uv]
+package = true
